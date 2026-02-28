@@ -10,3 +10,5 @@ faiss-cpu
 torch
 scikit-learn
 accelerate
+nltk
+datasets

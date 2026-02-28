@@ -1,84 +1,113 @@
 # Web MCP Server + RAG
 
-A Model Context Protocol (MCP) server that exposes two composable tools—`search` (Serper metadata) and `fetch` (single-page extraction)—alongside a live analytics dashboard and a powerful new **Ask (RAG)** pipeline. The UI runs on Gradio and can be reached directly or via MCP-compatible clients like Claude Desktop and Cursor.
+A Model Context Protocol (MCP) server that exposes two composable tools — `search` (Serper metadata) and `fetch` (single-page extraction) — alongside a live analytics dashboard and a powerful **Ask (RAG)** pipeline with streaming generation.
+
+The UI runs on Gradio and can be reached directly or via MCP-compatible clients like Claude Desktop and Cursor.
 
 ## Highlights
-- **Dual MCP tools** with shared rate limiting (`360 requests/hour`) and structured JSON responses.
-- **RAG Pipeline**: New *Ask* tab that searches the web, fetches the top results concurrently, locally embeds text into a FAISS index, reranks using a robust Cross-Encoder, and generates intelligent answers using a local LLM (`Qwen2.5-0.5B-Instruct`).
+
+- **Dual MCP tools** with shared rate limiting and structured JSON responses.
+- **RAG Pipeline**: Searches the web, fetches concurrently, chunks with sentence-aware boundaries (NLTK), embeds into a TTL-cached FAISS index, reranks with a Cross-Encoder, and **streams** an answer from a local LLM.
+- **Model Abstraction**: Every model (embed, reranker, generator) is swappable via environment variables — zero code changes.
+- **API Key Auth**: Optional bearer-token authentication for all endpoints.
 - **Daily analytics** split by tool covering the last 14 days.
-- **Persistent request counters** keyed by UTC date and tool: `{"YYYY-MM-DD": {"search": n, "fetch": m}}`, with automatic migration from legacy totals.
-- Ready-to-serve Gradio app with MCP endpoints exposed via `gr.api` for direct client consumption.
-
-## Requirements
-- Python 3.8 or newer.
-- Serper API key (`SERPER_API_KEY`) with access to the Search and News endpoints.
-- Machine Learning dependencies (`torch`, `sentence-transformers`, `transformers`, `faiss-cpu`, `accelerate`). See `requirements.txt`.
-
-Install everything with:
-```bash
-pip install -r requirements.txt
-```
-
-## Configuration
-1. Export your Serper API key:
-   ```bash
-   export SERPER_API_KEY="your-api-key"
-   ```
-2. (Optional) Override the analytics storage path:
-   ```bash
-   export ANALYTICS_DATA_DIR="/path/to/persistent/storage"
-   ```
-3. (Optional) Control private/local address policy for `fetch`:
-   - `FETCH_ALLOW_PRIVATE` — set to `1`/`true` to disable the SSRF guard entirely.
-
-## Running Locally
-Launch the Gradio server (with MCP support enabled) via:
-```bash
-python app.py
-```
-This starts a local UI at `http://localhost:7860` and exposes the MCP SSE endpoint at `http://localhost:7860/gradio_api/mcp/sse`.
-
-## Tool Reference
-### `search`
-- **Purpose**: Retrieve metadata-only results from Serper (general web or news).
-- **Inputs**: `query`, `search_type`, `num_results`
-
-### `fetch`
-- **Purpose**: Download a single URL and extract the readable article text via Trafilatura.
-- **Inputs**: `url`, `timeout`
-
-### `Ask (RAG)`
-- **Purpose**: A full Retrieval-Augmented Generation pipeline. Performs a live web search, fetches the top results, embeds them into a local FAISS index, reranks chunks using a Cross-Encoder, and generates an answer via a local LLM.
-- **Inputs**: `query`
-- **Output**: JSON payload with the generated `answer` and `sources` mapping to the source URL and reranker score.
 
 ## Architecture
 
 ```mermaid
 graph TD;
-    A[User Query] --> B{search}
-    B --> C[fetch top K pages]
-    C --> D[chunk texts into windows]
-    D --> E[embed via all-MiniLM-L6-v2]
-    E --> F[(Local FAISS Index)]
-    F --> G[retrieve top N chunks]
-    G --> H[rerank via ms-marco-MiniLM-L-6-v2]
-    H --> I[Qwen2.5-0.5B-Instruct]
-    I --> J[Final Answer + Sources]
+    A[User Query] --> B{Serper Search};
+    B --> C[Concurrent Fetch top K pages];
+    C --> D[Sentence-aware Chunking - NLTK];
+    D --> E[Embed via all-MiniLM-L6-v2];
+    E --> F[(FAISS Index - TTL Cached)];
+    F --> G[Retrieve top N chunks];
+    G --> H[Rerank via ms-marco Cross-Encoder];
+    H --> I[Stream answer via Qwen2.5-0.5B-Instruct];
+    I --> J[Final Answer + Sources];
 ```
 
+## Requirements
+
+- Python 3.8+
+- Serper API key (`SERPER_API_KEY`)
+
+```bash
+pip install -r requirements.txt
+```
+
+## Configuration
+
+All settings are driven by environment variables with sensible defaults:
+
+| Variable | Default | Description |
+|---|---|---|
+| `SERPER_API_KEY` | *(required)* | Serper search API key |
+| `EMBED_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Bi-encoder for embedding |
+| `RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Cross-encoder for reranking |
+| `GEN_MODEL` | `Qwen/Qwen2.5-0.5B-Instruct` | Local LLM for generation |
+| `CHUNK_SIZE` | `200` | Max words per chunk |
+| `CHUNK_OVERLAP` | `40` | Overlap words between chunks |
+| `RAG_TOP_K` | `6` | Chunks retrieved from FAISS |
+| `RERANK_TOP_K` | `3` | Chunks kept after reranking |
+| `FAISS_CACHE_TTL` | `300` | Seconds to cache a FAISS index |
+| `API_AUTH_TOKEN` | *(disabled)* | Set to enable bearer auth |
+
+## Authentication
+
+When `API_AUTH_TOKEN` is set, all API endpoints require an `Authorization` header:
+
+```
+Authorization: Bearer <your-token>
+```
+
+Gradio UI requests are exempt. Unauthorized API calls receive a `401`-style JSON error.
+
+## Running Locally
+
+```bash
+export SERPER_API_KEY="your-key"
+python app.py
+```
+
+Open `http://localhost:7860`. The MCP SSE endpoint is at `/gradio_api/mcp/sse`.
+
+## Tool Reference
+
+### `search`
+
+Retrieve metadata-only results from Serper (web or news).
+
+### `fetch`
+
+Download a URL and extract readable text via Trafilatura.
+
+### `Ask (RAG)`
+
+Full pipeline: search → fetch → chunk → embed → FAISS → rerank → stream answer.
+
 ## Design Decisions
-- **Local In-Memory FAISS**: Since HF Spaces environments are ephemeral and we process web searches on the fly, building a small in-memory FAISS index per query prevents the need for an external Vector DB and avoids network latency.
-- **Cross-Encoder Reranking**: The initial bi-encoder retrieval (MiniLM) is fast but misses semantic nuances. The cross-encoder (`ms-marco`) evaluates `(query, document)` pairs simultaneously, yielding a much higher relevance ordering before generation.
-- **Local Small LLM**: `Qwen/Qwen2.5-0.5B-Instruct` was chosen for its excellent instruction-following capabilities at a tiny footprint (~1GB), making it completely viable to run on CPU instances within free HF Spaces.
+
+- **Sentence-aware chunking** (NLTK `sent_tokenize`): Preserves semantic boundaries, unlike naive word-window splitting. Chunks are more coherent and yield better retrieval.
+- **FAISS TTL cache**: Identical document sets reuse the same index within the TTL window, avoiding redundant embedding on repeated queries.
+- **Cross-encoder reranking**: The bi-encoder is fast but imprecise. The cross-encoder evaluates `(query, doc)` pairs jointly, dramatically improving top-3 relevance.
+- **Streaming generation**: `TextIteratorStreamer` yields tokens as they're generated, providing instant visual feedback instead of a multi-second blank wait.
+- **Small local LLM**: `Qwen2.5-0.5B-Instruct` (~1GB) runs on CPU within free HF Spaces constraints.
 
 ## Benchmarks
-*(Typical local CPU performance metrics calculated via `benchmark.py`)*
-- **Retrieval Latency (Bi-encoder + FAISS)**: `~15 ms / query`
-- **Relevance (NDCG)**: `0.88+` (Cross-encoder reranking vs baseline retrieval significantly improves top 1-2 chunks)
-- **End-to-End Latency**: `~3.5 seconds` (Search -> Fetch -> Chunk -> Embed -> Rerank -> Generate)
+
+Run `python benchmark.py` to reproduce. Uses a real MS MARCO dev-small slice for NDCG.
+
+| Metric | Value |
+|---|---|
+| Retrieval latency (FAISS) | ~12 ms/query |
+| Retrieval throughput | ~80 queries/sec |
+| NDCG@10 (MS MARCO) | 0.65 - 0.85 |
+| E2E latency (search → answer) | ~3.5s |
 
 ## Troubleshooting
-- **`SERPER_API_KEY is not set`** – export the key in the environment where the server runs.
-- **`Rate limit exceeded`** – pause requests or reduce client concurrency.
-- **`Failed to load ML dependencies`** – ensure dependencies in `requirements.txt` are fully installed in your active environment.
+
+- **`SERPER_API_KEY is not set`** — export the key in your environment.
+- **`Rate limit exceeded`** — pause requests or reduce concurrency.
+- **`Failed to load ML models`** — ensure all `requirements.txt` deps are installed.
+- **`Unauthorized`** — provide correct bearer token or unset `API_AUTH_TOKEN`.

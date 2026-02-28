@@ -5,6 +5,7 @@ import html
 import asyncio
 import ipaddress
 import socket
+import json
 from typing import Optional, Dict, Any, List, Tuple
 import fnmatch
 from urllib.parse import urlsplit
@@ -19,6 +20,7 @@ from limits.aio.storage import MemoryStorage
 from limits.aio.strategies import MovingWindowRateLimiter
 
 from analytics import record_request, last_n_days_count_df
+from config import API_AUTH_TOKEN, RERANK_TOP_K, RAG_TOP_K
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -498,117 +500,154 @@ async def fetch(
         await record_request("fetch")
         return {"error": f"Unexpected error while fetching: {str(e)}"}
 
+
 # ──────────────────────────────────────────────────────────────────────────────
-# Tool: Ask (RAG Pipeline)
+# Auth helper
+# ──────────────────────────────────────────────────────────────────────────────
+def _check_auth(request: Optional[gr.Request]) -> Optional[Dict[str, str]]:
+    """If API_AUTH_TOKEN is set, validate the Authorization header.
+    Returns an error dict on failure, or None on success."""
+    if not API_AUTH_TOKEN:
+        return None  # auth disabled
+    if request is None:
+        return None  # Gradio UI calls don't carry gr.Request in all modes
+    headers = getattr(request, "headers", None) or {}
+    auth = headers.get("authorization", "")
+    if auth == f"Bearer {API_AUTH_TOKEN}":
+        return None
+    return {"error": "Unauthorized. Provide a valid Bearer token in the Authorization header."}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Tool: Ask (RAG Pipeline) — streaming
 # ──────────────────────────────────────────────────────────────────────────────
 rag_pipeline = None
-reranker = None
+reranker_instance = None
+
 
 async def ask_rag(
     query: str,
     search_type: str = "search",
     num_results: int = 4,
     request: Optional[gr.Request] = None,
-) -> Dict[str, Any]:
-    """Search, fetch, chunk, embed, rerank, and generate an answer."""
-    global rag_pipeline, reranker
-    
-    if not query or not query.strip():
-        await record_request("search") # Basic tracking
-        return {"error": "Missing 'query'."}
+):
+    """Search → fetch → chunk → embed → rerank → stream answer.
+    Yields (partial_answer, sources_json_str) tuples for Gradio streaming."""
+    global rag_pipeline, reranker_instance
 
+    empty_sources = "[]"
+
+    if not query or not query.strip():
+        await record_request("search")
+        yield "❌ Missing query.", empty_sources
+        return
+
+    auth_err = _check_auth(request)
+    if auth_err:
+        yield f"❌ {auth_err['error']}", empty_sources
+        return
+
+    # Lazy init models
     if rag_pipeline is None:
+        yield "⏳ Loading ML models (first request only)...", empty_sources
         try:
             from rag import RAGPipeline
             from reranker import CrossEncoderReranker
-            import asyncio
-            import torch
-            # Initialize ML in thread to avoid blocking loop initially
+
             def _init_models():
-                global rag_pipeline, reranker
+                global rag_pipeline, reranker_instance
                 if rag_pipeline is None:
                     rag_pipeline = RAGPipeline()
-                    reranker = CrossEncoderReranker()
+                    reranker_instance = CrossEncoderReranker()
+
             await asyncio.to_thread(_init_models)
         except Exception as e:
-            return {"error": f"Failed to load ML dependencies: {e}"}
+            yield f"❌ Failed to load ML models: {e}", empty_sources
+            return
+
+    yield "🔍 Searching the web...", empty_sources
 
     search_res = await search(query, search_type, num_results, request)
     if "error" in search_res:
-        return search_res
+        yield f"❌ {search_res['error']}", empty_sources
+        return
 
     results = search_res.get("results", [])
     if not results:
-        return {"error": "No search results found to answer from."}
+        yield "❌ No search results found.", empty_sources
+        return
 
     urls = [r["link"] for r in results if r.get("link")]
-    
-    # Run fetch concurrently
+    url_to_title = {r["link"]: r.get("title", "") for r in results if r.get("link")}
+
+    yield f"📥 Fetching {len(urls)} pages...", empty_sources
+
     fetch_tasks = [fetch(url, timeout=15, request=request) for url in urls]
     fetched_results = await asyncio.gather(*fetch_tasks)
 
     documents = []
-    # Map title for sources array
-    url_to_title = {r["link"]: r.get("title", "") for r in results if r.get("link")}
-    
     for f_res in fetched_results:
         if "content" in f_res and f_res["content"]:
-            documents.append({
-                "url": f_res["url"],
-                "content": f_res["content"]
-            })
+            documents.append({"url": f_res["url"], "content": f_res["content"]})
 
     if not documents:
-        return {"error": "Could not pull any text content from the search results."}
+        yield "❌ Could not extract text from any result.", empty_sources
+        return
 
-    def _run_rag():
+    yield "🧠 Embedding & reranking...", empty_sources
+
+    # Build index, retrieve, rerank (CPU-bound → thread)
+    def _prepare_context():
         rag_pipeline.build_index(documents)
-        retrieved = rag_pipeline.retrieve(query, top_k=6)
+        retrieved = rag_pipeline.retrieve(query, top_k=RAG_TOP_K)
         if not retrieved:
-            return {"error": "Failed to retrieve relevant context."}, None
+            return None, None, []
 
         texts = [r["text"] for r in retrieved]
-        
-        reranked = reranker.rerank(query, texts)
-        best_components = reranked[:3]
-        best_context = "\n\n".join([c[0] for c in best_components])
-        
-        answer = rag_pipeline.generate_answer(query, best_context)
-        
-        sources = [
-            {
-                "text": c[0], 
-                "reranker_score": float(c[1])
-            } 
-            for c in best_components
-        ]
-        
-        for s in sources:
+        reranked = reranker_instance.rerank(query, texts, top_k=RERANK_TOP_K)
+        best_context = "\n\n".join([c[0] for c in reranked])
+
+        sources = []
+        for c_text, c_score in reranked:
+            src = {"text": c_text[:200] + "..." if len(c_text) > 200 else c_text,
+                   "reranker_score": round(float(c_score), 4)}
             for r in retrieved:
-                if r["text"] == s["text"]:
-                    s["url"] = r["source"]
-                    s["title"] = url_to_title.get(r["source"], "")
+                if r["text"] == c_text:
+                    src["url"] = r["source"]
+                    src["title"] = url_to_title.get(r["source"], "")
                     break
-                    
-        return answer, sources
+            sources.append(src)
+        return best_context, retrieved, sources
 
     try:
-        answer, sources_out = await asyncio.to_thread(_run_rag)
-        if isinstance(answer, dict) and "error" in answer:
-            return answer
+        best_context, retrieved, sources = await asyncio.to_thread(_prepare_context)
     except Exception as e:
-        return {"error": f"ML Error: {e}"}
+        yield f"❌ ML Error: {e}", empty_sources
+        return
 
-    for s in sources_out:
-        if len(s["text"]) > 200:
-            s["text"] = s["text"][:200] + "..."
+    if best_context is None:
+        yield "❌ No relevant context retrieved.", empty_sources
+        return
 
-    return {
-        "query": query,
-        "answer": answer,
-        "sources": sources_out,
-        "extracted_docs_count": len(documents)
-    }
+    sources_json = json.dumps(sources, indent=2)
+
+    # Stream the generation
+    yield "✍️ Generating answer...", sources_json
+
+    partial_answer = ""
+    try:
+        def _stream_gen():
+            return list(rag_pipeline.generate_answer_stream(query, best_context))
+
+        tokens = await asyncio.to_thread(_stream_gen)
+        for tok in tokens:
+            partial_answer += tok
+            yield partial_answer, sources_json
+    except Exception as e:
+        yield f"❌ Generation error: {e}", sources_json
+        return
+
+    await record_request("search")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -632,30 +671,38 @@ with gr.Blocks(title="Web MCP Server") as demo:
 
     with gr.Tabs():
         with gr.Tab("Ask (RAG)"):
-            gr.Markdown("## Search + AI Answer")
+            gr.Markdown("## 🧠 Search + AI Answer (Streaming)")
             rag_query_input = gr.Textbox(
                 label="Question",
                 placeholder='e.g. "What is the newest context window for GPT-4?"',
-                scale=4,
             )
             rag_run_button = gr.Button("Ask", variant="primary")
-            rag_output = gr.JSON(label="AI Answer & Extracted Sources")
-            
+            rag_answer_output = gr.Textbox(
+                label="AI Answer",
+                lines=10,
+                interactive=False,
+            )
+            rag_sources_output = gr.Textbox(
+                label="Sources (JSON)",
+                lines=6,
+                interactive=False,
+            )
+
             rag_run_button.click(
                 fn=ask_rag,
                 inputs=[rag_query_input],
-                outputs=rag_output,
-                api_name="ask_rag"
+                outputs=[rag_answer_output, rag_sources_output],
+                api_name="ask_rag",
             )
 
             gr.Examples(
                 examples=[
                     ["What is the speed of light?"],
                     ["Who won the last Super Bowl?"],
-                    ["Explain the Model Context Protocol."]
+                    ["Explain the Model Context Protocol."],
                 ],
                 inputs=[rag_query_input],
-                outputs=rag_output,
+                outputs=[rag_answer_output, rag_sources_output],
                 fn=ask_rag,
                 cache_examples=False,
             )
