@@ -1,0 +1,12 @@
+gradio
+httpx[http2]
+trafilatura
+python-dateutil
+limits
+filelock
+sentence-transformers
+transformers
+faiss-cpu
+torch
+scikit-learn
+accelerate
