@@ -1,26 +1,118 @@
-import os
-import time
-import re
-import html
-import asyncio
-import ipaddress
-import socket
-import json
-from typing import Optional, Dict, Any, List, Tuple
-import fnmatch
-from urllib.parse import urlsplit
-from datetime import datetime, timezone
+"""
+Web MCP Server - Model Context Protocol server with RAG capabilities.
 
+Provides search and fetch tools via MCP, plus a RAG pipeline for
+question answering with streaming generation.
+"""
+import asyncio
+import atexit
+import fnmatch
+import html
+import ipaddress
+import json
+import logging
+import os
+import random
+import re
+import signal
+import socket
+import time
+from datetime import datetime, timezone
+from functools import wraps
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
+from urllib.parse import urlsplit
+
+import gradio as gr
 import httpx
 import trafilatura
-import gradio as gr
 from dateutil import parser as dateparser
 from limits import parse
 from limits.aio.storage import MemoryStorage
 from limits.aio.strategies import MovingWindowRateLimiter
 
-from analytics import record_request, last_n_days_count_df
-from config import API_AUTH_TOKEN, RERANK_TOP_K, RAG_TOP_K
+from analytics import last_n_days_count_df, record_request
+from config import API_AUTH_TOKEN, RAG_TOP_K, RERANK_TOP_K
+
+# Configure logging
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+# Type variable for retry decorator
+T = TypeVar("T")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Retry Logic with Exponential Backoff
+# ──────────────────────────────────────────────────────────────────────────────
+async def retry_with_backoff(
+    func: Callable[..., T],
+    *args,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    max_delay: float = 30.0,
+    exponential_base: float = 2.0,
+    jitter: bool = True,
+    retryable_exceptions: tuple = (httpx.HTTPError, asyncio.TimeoutError),
+    **kwargs,
+) -> T:
+    """Execute an async function with exponential backoff retry.
+
+    Args:
+        func: Async function to execute.
+        *args: Positional arguments for func.
+        max_retries: Maximum number of retry attempts.
+        base_delay: Initial delay in seconds.
+        max_delay: Maximum delay cap in seconds.
+        exponential_base: Base for exponential backoff.
+        jitter: Add randomness to delay to avoid thundering herd.
+        retryable_exceptions: Tuple of exceptions that trigger retry.
+        **kwargs: Keyword arguments for func.
+
+    Returns:
+        Result from successful function call.
+
+    Raises:
+        Last exception if all retries exhausted.
+    """
+    last_exception = None
+
+    for attempt in range(max_retries + 1):
+        try:
+            return await func(*args, **kwargs)
+        except retryable_exceptions as e:
+            last_exception = e
+
+            if attempt == max_retries:
+                logger.warning(
+                    "All %d retries exhausted for %s: %s",
+                    max_retries,
+                    func.__name__,
+                    e,
+                )
+                raise
+
+            # Calculate delay with exponential backoff
+            delay = min(base_delay * (exponential_base ** attempt), max_delay)
+
+            # Add jitter (±25% randomness)
+            if jitter:
+                delay = delay * (0.75 + random.random() * 0.5)
+
+            logger.info(
+                "Retry %d/%d for %s after %.2fs: %s",
+                attempt + 1,
+                max_retries,
+                func.__name__,
+                delay,
+                e,
+            )
+            await asyncio.sleep(delay)
+
+    raise last_exception  # Should never reach here
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -843,6 +935,61 @@ demo.queue(
 )
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Cleanup & Health Check
+# ──────────────────────────────────────────────────────────────────────────────
+async def _cleanup_clients():
+    """Close HTTP clients gracefully."""
+    logger.info("Shutting down HTTP clients...")
+    await serper_client.aclose()
+    await web_client.aclose()
+    logger.info("HTTP clients closed.")
+
+
+def _sync_cleanup():
+    """Synchronous cleanup wrapper for atexit."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(_cleanup_clients())
+        else:
+            loop.run_until_complete(_cleanup_clients())
+    except Exception as e:
+        logger.warning("Cleanup error (may be normal during shutdown): %s", e)
+
+
+atexit.register(_sync_cleanup)
+
+
+async def health_check() -> Dict[str, Any]:
+    """Health check endpoint for monitoring.
+
+    Returns:
+        Dict with status, timestamp, and component health.
+    """
+    status = {
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "components": {
+            "serper_api_key": "configured" if SERPER_API_KEY else "missing",
+            "auth": "enabled" if API_AUTH_TOKEN else "disabled",
+        },
+    }
+
+    # Check if ML models are loaded
+    if rag_pipeline is not None:
+        status["components"]["rag_pipeline"] = "loaded"
+    else:
+        status["components"]["rag_pipeline"] = "not_loaded"
+
+    return status
+
+
+# Expose health check as API
+gr.api(health_check, api_name="health")
+
+
 if __name__ == "__main__":
+    logger.info("Starting Web MCP Server...")
     # Launch with MCP server enabled
     demo.launch(mcp_server=True, show_api=True)

@@ -1,14 +1,40 @@
-gradio
-httpx[http2]
-trafilatura
-python-dateutil
-limits
-filelock
-sentence-transformers
-transformers
-faiss-cpu
-torch
-scikit-learn
-accelerate
-nltk
-datasets
+# Web framework and HTTP
+gradio>=4.0.0,<5.0.0
+httpx[http2]>=0.25.0,<1.0.0
+
+# Content extraction
+trafilatura>=1.6.0,<2.0.0
+
+# Utilities
+python-dateutil>=2.8.0,<3.0.0
+limits>=3.0.0,<4.0.0
+filelock>=3.12.0,<4.0.0
+
+# ML - Embeddings and generation
+sentence-transformers>=2.2.0,<3.0.0
+transformers>=4.35.0,<5.0.0
+torch>=2.0.0,<3.0.0
+accelerate>=0.24.0,<1.0.0
+
+# ML - Vector search
+faiss-cpu>=1.7.0,<2.0.0
+
+# ML - Evaluation
+scikit-learn>=1.3.0,<2.0.0
+
+# NLP
+nltk>=3.8.0,<4.0.0
+
+# Datasets (for benchmarking)
+datasets>=2.14.0,<3.0.0
+
+# Data processing
+pandas>=2.0.0,<3.0.0
+
+# Testing (dev dependencies)
+pytest>=7.4.0,<9.0.0
+pytest-asyncio>=0.21.0,<1.0.0
+pytest-cov>=4.1.0,<6.0.0
+
+# Code quality (dev dependencies)
+ruff>=0.1.0,<1.0.0
