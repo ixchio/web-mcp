@@ -4,15 +4,16 @@ RAG (Retrieval-Augmented Generation) pipeline module.
 Provides the RAGPipeline class for document embedding, FAISS indexing,
 retrieval, and streaming LLM generation.
 """
+
 import hashlib
 import logging
 import threading
 import time
-from typing import Any, Dict, Generator, List, Optional, Tuple
+from collections.abc import Generator
+from typing import Any, Optional
 
 import faiss
 import nltk
-import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
@@ -48,8 +49,8 @@ class _IndexCacheEntry:
     def __init__(
         self,
         index: faiss.Index,
-        chunks: List[str],
-        chunk_sources: List[str],
+        chunks: list[str],
+        chunk_sources: list[str],
         ttl: int,
     ):
         self.index = index
@@ -58,11 +59,11 @@ class _IndexCacheEntry:
         self.expires_at = time.time() + ttl
 
 
-_index_cache: Dict[str, _IndexCacheEntry] = {}
+_index_cache: dict[str, _IndexCacheEntry] = {}
 _index_cache_lock = threading.Lock()
 
 
-def _docs_cache_key(documents: List[Dict[str, str]]) -> str:
+def _docs_cache_key(documents: list[dict[str, str]]) -> str:
     """Deterministic hash of document URLs to identify identical index sets."""
     urls = sorted(d.get("url", "") for d in documents)
     return hashlib.sha256("|".join(urls).encode()).hexdigest()
@@ -97,15 +98,19 @@ class RAGPipeline:
             # 1. Embedding model
             self.embed_model = SentenceTransformer(embed_model_name)
             self.embedding_dim = self.embed_model.get_sentence_embedding_dimension()
-            logger.info("Loaded embedding model: %s (dim=%d)", embed_model_name, self.embedding_dim)
+            logger.info(
+                "Loaded embedding model: %s (dim=%d)",
+                embed_model_name,
+                self.embedding_dim,
+            )
         except Exception as e:
             logger.error("Failed to load embedding model %s: %s", embed_model_name, e)
             raise RuntimeError(f"Failed to load embedding model: {e}") from e
 
         # State (set by build_index)
         self.index: Optional[faiss.Index] = None
-        self.chunks: List[str] = []
-        self.chunk_sources: List[str] = []
+        self.chunks: list[str] = []
+        self.chunk_sources: list[str] = []
 
         try:
             # 2. Generator LM
@@ -116,7 +121,9 @@ class RAGPipeline:
                 torch_dtype=torch.float32,
                 device_map=self.device,
             )
-            logger.info("Loaded generator model: %s (device=%s)", gen_model_name, self.device)
+            logger.info(
+                "Loaded generator model: %s (device=%s)", gen_model_name, self.device
+            )
         except Exception as e:
             logger.error("Failed to load generator model %s: %s", gen_model_name, e)
             raise RuntimeError(f"Failed to load generator model: {e}") from e
@@ -128,7 +135,7 @@ class RAGPipeline:
         source_url: str,
         chunk_size: Optional[int] = None,
         overlap: Optional[int] = None,
-    ) -> Tuple[List[str], List[str]]:
+    ) -> tuple[list[str], list[str]]:
         """Split text into chunks at sentence boundaries.
 
         Groups sentences until ``chunk_size`` words are reached, then starts
@@ -148,10 +155,10 @@ class RAGPipeline:
         overlap = overlap or CHUNK_OVERLAP
 
         sentences = nltk.sent_tokenize(text)
-        chunks: List[str] = []
-        sources: List[str] = []
+        chunks: list[str] = []
+        sources: list[str] = []
 
-        current_words: List[str] = []
+        current_words: list[str] = []
         for sent in sentences:
             words = sent.split()
             # If adding this sentence overflows, flush the current chunk
@@ -170,7 +177,7 @@ class RAGPipeline:
         return chunks, sources
 
     # ── Index building (with TTL cache) ──────────────────────────────────────
-    def build_index(self, documents: List[Dict[str, str]]) -> bool:
+    def build_index(self, documents: list[dict[str, str]]) -> bool:
         """Chunk documents and create a FAISS index.
 
         Uses a thread-safe TTL cache to avoid redundant embedding on repeated
@@ -195,8 +202,8 @@ class RAGPipeline:
                 return False  # cache hit
 
         # Build index outside the lock (expensive operation)
-        chunks: List[str] = []
-        chunk_sources: List[str] = []
+        chunks: list[str] = []
+        chunk_sources: list[str] = []
 
         for doc in documents:
             content = doc.get("content", "")
@@ -221,7 +228,10 @@ class RAGPipeline:
         # Thread-safe cache update
         with _index_cache_lock:
             _index_cache[cache_key] = _IndexCacheEntry(
-                index, chunks, chunk_sources, FAISS_CACHE_TTL,
+                index,
+                chunks,
+                chunk_sources,
+                FAISS_CACHE_TTL,
             )
 
         self.index = index
@@ -231,7 +241,7 @@ class RAGPipeline:
         return True  # fresh build
 
     # ── Retrieval ────────────────────────────────────────────────────────────
-    def retrieve(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
+    def retrieve(self, query: str, top_k: Optional[int] = None) -> list[dict[str, Any]]:
         """Retrieve the top_k most similar chunks.
 
         Args:
@@ -250,14 +260,16 @@ class RAGPipeline:
 
         distances, indices = self.index.search(query_emb, min(top_k, len(self.chunks)))
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         for i, idx in enumerate(indices[0]):
             if idx != -1:
-                results.append({
-                    "text": self.chunks[idx],
-                    "source": self.chunk_sources[idx],
-                    "score": float(distances[0][i]),
-                })
+                results.append(
+                    {
+                        "text": self.chunks[idx],
+                        "source": self.chunk_sources[idx],
+                        "score": float(distances[0][i]),
+                    }
+                )
         return results
 
     # ── Generation (blocking) ────────────────────────────────────────────────
@@ -303,12 +315,16 @@ class RAGPipeline:
             {"role": "user", "content": prompt},
         ]
         text_input = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True,
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
         )
         inputs = self.tokenizer([text_input], return_tensors="pt").to(self.device)
 
         streamer = TextIteratorStreamer(
-            self.tokenizer, skip_prompt=True, skip_special_tokens=True,
+            self.tokenizer,
+            skip_prompt=True,
+            skip_special_tokens=True,
         )
 
         gen_kwargs = dict(
@@ -325,7 +341,6 @@ class RAGPipeline:
         thread = threading.Thread(target=lambda: self.generator.generate(**gen_kwargs))
         thread.start()
 
-        for token_text in streamer:
-            yield token_text
+        yield from streamer
 
         thread.join()

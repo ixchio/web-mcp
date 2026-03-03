@@ -4,6 +4,7 @@ Analytics module for tracking request counts.
 Provides async-safe request counting with file-based persistence
 and support for HuggingFace Spaces persistent storage.
 """
+
 import asyncio
 import json
 import logging

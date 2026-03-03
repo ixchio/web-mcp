@@ -4,6 +4,7 @@ Web MCP Server - Model Context Protocol server with RAG capabilities.
 Provides search and fetch tools via MCP, plus a RAG pipeline for
 question answering with streaming generation.
 """
+
 import asyncio
 import atexit
 import fnmatch
@@ -14,12 +15,10 @@ import logging
 import os
 import random
 import re
-import signal
 import socket
 import time
 from datetime import datetime, timezone
-from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, Callable, Optional, TypeVar
 from urllib.parse import urlsplit
 
 import gradio as gr
@@ -96,7 +95,7 @@ async def retry_with_backoff(
                 raise
 
             # Calculate delay with exponential backoff
-            delay = min(base_delay * (exponential_base ** attempt), max_delay)
+            delay = min(base_delay * (exponential_base**attempt), max_delay)
 
             # Add jitter (±25% randomness)
             if jitter:
@@ -113,6 +112,7 @@ async def retry_with_backoff(
             await asyncio.sleep(delay)
 
     raise last_exception  # Should never reach here
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -179,6 +179,7 @@ EXTRACT_CONCURRENCY = max(
 SEARCH_CACHE_TTL = max(0, int(os.getenv("SEARCH_CACHE_TTL", "30")))
 FETCH_CACHE_TTL = max(0, int(os.getenv("FETCH_CACHE_TTL", "300")))
 
+
 # Controls for private/local address handling in fetch()
 def _env_flag(name: str, default: bool = False) -> bool:
     """Parse boolean-like env vars such as 1/true/yes/on."""
@@ -187,17 +188,20 @@ def _env_flag(name: str, default: bool = False) -> bool:
         return default
     return str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
 
+
 # When True, allow any destination (disables SSRF guard — not recommended)
 FETCH_ALLOW_PRIVATE = _env_flag("FETCH_ALLOW_PRIVATE", False)
 
 # Optional comma/space separated host patterns to allow even if private, e.g.:
 #   FETCH_PRIVATE_ALLOWLIST="*.internal.example.com, my-proxy.local"
 FETCH_PRIVATE_ALLOWLIST = [
-    p for p in re.split(r"[\s,]+", os.getenv("FETCH_PRIVATE_ALLOWLIST", "").strip()) if p
+    p
+    for p in re.split(r"[\s,]+", os.getenv("FETCH_PRIVATE_ALLOWLIST", "").strip())
+    if p
 ]
 
-_search_cache: Dict[Tuple[str, str, int], Dict[str, Any]] = {}
-_fetch_cache: Dict[str, Dict[str, Any]] = {}
+_search_cache: dict[tuple[str, str, int], dict[str, Any]] = {}
+_fetch_cache: dict[str, dict[str, Any]] = {}
 _search_cache_lock: Optional[asyncio.Lock] = None
 _fetch_cache_lock: Optional[asyncio.Lock] = None
 _search_sema: Optional[asyncio.Semaphore] = None
@@ -238,7 +242,7 @@ def _get_semaphore(name: str) -> asyncio.Semaphore:
     raise ValueError(f"Unknown semaphore: {name}")
 
 
-async def _cache_get(name: str, cache: Dict[Any, Any], key: Any):
+async def _cache_get(name: str, cache: dict[Any, Any], key: Any):
     lock = _get_cache_lock(name)
     async with lock:
         entry = cache.get(key)
@@ -250,7 +254,7 @@ async def _cache_get(name: str, cache: Dict[Any, Any], key: Any):
         return entry["value"]
 
 
-async def _cache_set(name: str, cache: Dict[Any, Any], key: Any, value: Any, ttl: int):
+async def _cache_set(name: str, cache: dict[Any, Any], key: Any, value: Any, ttl: int):
     if ttl <= 0:
         return
     lock = _get_cache_lock(name)
@@ -285,8 +289,8 @@ def _host_matches_allowlist(host: str) -> bool:
     return False
 
 
-async def _resolve_addresses(host: str) -> List[str]:
-    def _resolve() -> List[str]:
+async def _resolve_addresses(host: str) -> list[str]:
+    def _resolve() -> list[str]:
         try:
             return list({ai[4][0] for ai in socket.getaddrinfo(host, None)})
         except Exception:
@@ -295,7 +299,7 @@ async def _resolve_addresses(host: str) -> List[str]:
     return await asyncio.to_thread(_resolve)
 
 
-async def _host_is_public(host: str) -> Tuple[bool, List[str]]:
+async def _host_is_public(host: str) -> tuple[bool, list[str]]:
     """Return (is_public, resolved_addresses).
 
     - If resolution fails, treat as public and let HTTP request decide.
@@ -325,9 +329,8 @@ async def _host_is_public(host: str) -> Tuple[bool, List[str]]:
 async def _check_rate_limits(bucket: str, ip: str) -> Optional[str]:
     if not await limiter.hit(GLOBAL_RATE, "global"):
         return f"Global rate limit exceeded. Limit: {GLOBAL_RATE}."
-    if ip != "unknown":
-        if not await limiter.hit(PER_IP_RATE, f"{bucket}:{ip}"):
-            return f"Per-IP rate limit exceeded. Limit: {PER_IP_RATE}."
+    if ip != "unknown" and not await limiter.hit(PER_IP_RATE, f"{bucket}:{ip}"):
+        return f"Per-IP rate limit exceeded. Limit: {PER_IP_RATE}."
     return None
 
 
@@ -364,7 +367,7 @@ async def search(
     search_type: str = "search",
     num_results: Optional[int] = 4,
     request: Optional[gr.Request] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Perform a web or news search via Serper and return metadata only."""
     start_time = time.time()
 
@@ -406,7 +409,7 @@ async def search(
         endpoint = (
             SERPER_NEWS_ENDPOINT if search_type == "news" else SERPER_SEARCH_ENDPOINT
         )
-        payload: Dict[str, Any] = {"q": query, "num": num_results}
+        payload: dict[str, Any] = {"q": query, "num": num_results}
         if search_type == "news":
             payload["type"] = "news"
             payload["page"] = 1
@@ -425,11 +428,11 @@ async def search(
             }
 
         data = resp.json()
-        raw_results: List[Dict[str, Any]] = (
+        raw_results: list[dict[str, Any]] = (
             data.get("news", []) if search_type == "news" else data.get("organic", [])
         )
 
-        formatted: List[Dict[str, Any]] = []
+        formatted: list[dict[str, Any]] = []
         for idx, item in enumerate(raw_results[:num_results], start=1):
             entry = {
                 "position": idx,
@@ -471,7 +474,7 @@ async def fetch(
     url: str,
     timeout: int = 20,
     request: Optional[gr.Request] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Fetch a single URL and extract the main readable content."""
     start_time = time.time()
 
@@ -520,7 +523,7 @@ async def fetch(
             async with web_client.stream("GET", url, timeout=timeout) as resp:
                 status_code = resp.status_code
                 total = 0
-                chunks: List[bytes] = []
+                chunks: list[bytes] = []
                 async for chunk in resp.aiter_bytes():
                     total += len(chunk)
                     if total > FETCH_MAX_BYTES:
@@ -539,7 +542,9 @@ async def fetch(
             final_host = urlsplit(final_url_str).hostname or ""
         except Exception:
             final_host = ""
-        if final_host and not (FETCH_ALLOW_PRIVATE or _host_matches_allowlist(final_host)):
+        if final_host and not (
+            FETCH_ALLOW_PRIVATE or _host_matches_allowlist(final_host)
+        ):
             final_public, _ = await _host_is_public(final_host)
             if not final_public:
                 await record_request("fetch")
@@ -596,7 +601,7 @@ async def fetch(
 # ──────────────────────────────────────────────────────────────────────────────
 # Auth helper
 # ──────────────────────────────────────────────────────────────────────────────
-def _check_auth(request: Optional[gr.Request]) -> Optional[Dict[str, str]]:
+def _check_auth(request: Optional[gr.Request]) -> Optional[dict[str, str]]:
     """If API_AUTH_TOKEN is set, validate the Authorization header.
     Returns an error dict on failure, or None on success."""
     if not API_AUTH_TOKEN:
@@ -607,7 +612,9 @@ def _check_auth(request: Optional[gr.Request]) -> Optional[Dict[str, str]]:
     auth = headers.get("authorization", "")
     if auth == f"Bearer {API_AUTH_TOKEN}":
         return None
-    return {"error": "Unauthorized. Provide a valid Bearer token in the Authorization header."}
+    return {
+        "error": "Unauthorized. Provide a valid Bearer token in the Authorization header."
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -701,8 +708,10 @@ async def ask_rag(
 
         sources = []
         for c_text, c_score in reranked:
-            src = {"text": c_text[:200] + "..." if len(c_text) > 200 else c_text,
-                   "reranker_score": round(float(c_score), 4)}
+            src = {
+                "text": c_text[:200] + "..." if len(c_text) > 200 else c_text,
+                "reranker_score": round(float(c_score), 4),
+            }
             for r in retrieved:
                 if r["text"] == c_text:
                     src["url"] = r["source"]
@@ -728,6 +737,7 @@ async def ask_rag(
 
     partial_answer = ""
     try:
+
         def _stream_gen():
             return list(rag_pipeline.generate_answer_stream(query, best_context))
 
@@ -740,6 +750,56 @@ async def ask_rag(
         return
 
     await record_request("search")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Cleanup & Health Check
+# ──────────────────────────────────────────────────────────────────────────────
+async def _cleanup_clients():
+    """Close HTTP clients gracefully."""
+    logger.info("Shutting down HTTP clients...")
+    await serper_client.aclose()
+    await web_client.aclose()
+    logger.info("HTTP clients closed.")
+
+
+def _sync_cleanup():
+    """Synchronous cleanup wrapper for atexit."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(_cleanup_clients())
+        else:
+            loop.run_until_complete(_cleanup_clients())
+    except Exception as e:
+        logger.warning("Cleanup error (may be normal during shutdown): %s", e)
+
+
+atexit.register(_sync_cleanup)
+
+
+async def health_check() -> dict[str, Any]:
+    """Health check endpoint for monitoring.
+
+    Returns:
+        Dict with status, timestamp, and component health.
+    """
+    status = {
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "components": {
+            "serper_api_key": "configured" if SERPER_API_KEY else "missing",
+            "auth": "enabled" if API_AUTH_TOKEN else "disabled",
+        },
+    }
+
+    # Check if ML models are loaded
+    if rag_pipeline is not None:
+        status["components"]["rag_pipeline"] = "loaded"
+    else:
+        status["components"]["rag_pipeline"] = "not_loaded"
+
+    return status
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -877,13 +937,22 @@ with gr.Blocks(title="Web MCP Server") as demo:
                 fn=search,
                 inputs=[query_input, search_type_input, num_results_input],
                 outputs=search_output,
-                api_name=False,
+                api_name="search",
             )
             fetch_button.click(
                 fn=fetch,
                 inputs=[url_input, timeout_input],
                 outputs=fetch_output,
-                api_name=False,
+                api_name="fetch",
+            )
+
+            # Hidden load event for health check endpoint
+            health_output = gr.JSON(visible=False)
+            demo.load(
+                fn=health_check,
+                inputs=None,
+                outputs=health_output,
+                api_name="health",
             )
 
         with gr.Tab("Analytics"):
@@ -924,10 +993,6 @@ with gr.Blocks(title="Web MCP Server") as demo:
         api_name=False,
     )
 
-    # Expose MCP tools
-    gr.api(search, api_name="search")
-    gr.api(fetch, api_name="fetch")
-
 
 demo.queue(
     max_size=int(os.getenv("GRADIO_MAX_QUEUE", "256")),
@@ -936,57 +1001,8 @@ demo.queue(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Cleanup & Health Check
+# Entrypoint
 # ──────────────────────────────────────────────────────────────────────────────
-async def _cleanup_clients():
-    """Close HTTP clients gracefully."""
-    logger.info("Shutting down HTTP clients...")
-    await serper_client.aclose()
-    await web_client.aclose()
-    logger.info("HTTP clients closed.")
-
-
-def _sync_cleanup():
-    """Synchronous cleanup wrapper for atexit."""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(_cleanup_clients())
-        else:
-            loop.run_until_complete(_cleanup_clients())
-    except Exception as e:
-        logger.warning("Cleanup error (may be normal during shutdown): %s", e)
-
-
-atexit.register(_sync_cleanup)
-
-
-async def health_check() -> Dict[str, Any]:
-    """Health check endpoint for monitoring.
-
-    Returns:
-        Dict with status, timestamp, and component health.
-    """
-    status = {
-        "status": "healthy",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "components": {
-            "serper_api_key": "configured" if SERPER_API_KEY else "missing",
-            "auth": "enabled" if API_AUTH_TOKEN else "disabled",
-        },
-    }
-
-    # Check if ML models are loaded
-    if rag_pipeline is not None:
-        status["components"]["rag_pipeline"] = "loaded"
-    else:
-        status["components"]["rag_pipeline"] = "not_loaded"
-
-    return status
-
-
-# Expose health check as API
-gr.api(health_check, api_name="health")
 
 
 if __name__ == "__main__":

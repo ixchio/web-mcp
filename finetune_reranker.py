@@ -8,10 +8,10 @@ own training dataset (typically from CSV, JSONL, or HuggingFace Datasets).
 Usage:
     python finetune_reranker.py --output-dir ./my-model --epochs 3
 """
+
 import argparse
 import logging
 import math
-import os
 import sys
 from pathlib import Path
 
@@ -125,9 +125,7 @@ def main():
     )
 
     # Calculate warmup steps
-    warmup_steps = math.ceil(
-        len(train_dataloader) * args.epochs * args.warmup_ratio
-    )
+    warmup_steps = math.ceil(len(train_dataloader) * args.epochs * args.warmup_ratio)
     logger.info(
         "Training config: epochs=%d, batch_size=%d, warmup_steps=%d",
         args.epochs,

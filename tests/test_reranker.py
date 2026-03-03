@@ -1,4 +1,5 @@
 """Tests for cross-encoder reranker module."""
+
 import sys
 from unittest import mock
 
@@ -21,8 +22,9 @@ class TestCrossEncoderReranker:
         mock_model = mock.MagicMock()
         mock_model.predict.return_value = [0.9, 0.3, 0.1, 0.7]
         mock_cross_encoder.return_value = mock_model
-        
+
         from reranker import CrossEncoderReranker
+
         reranker = CrossEncoderReranker()
         return reranker
 
@@ -30,7 +32,7 @@ class TestCrossEncoderReranker:
         """Test rerank returns results sorted by score descending."""
         query = "What is the speed of light?"
         results = mock_reranker.rerank(query, sample_chunks)
-        
+
         # Check sorted by score descending
         scores = [r[1] for r in results]
         assert scores == sorted(scores, reverse=True)
@@ -39,7 +41,7 @@ class TestCrossEncoderReranker:
         """Test rerank returns list of (text, score) tuples."""
         query = "test query"
         results = mock_reranker.rerank(query, sample_chunks)
-        
+
         for result in results:
             assert isinstance(result, tuple)
             assert len(result) == 2
@@ -50,7 +52,7 @@ class TestCrossEncoderReranker:
         """Test rerank respects top_k parameter."""
         query = "test query"
         results = mock_reranker.rerank(query, sample_chunks, top_k=2)
-        
+
         assert len(results) == 2
 
     def test_rerank_empty_documents(self, mock_reranker):
@@ -63,7 +65,7 @@ class TestCrossEncoderReranker:
         with mock.patch.object(mock_reranker.model, "predict", return_value=[0.5, 0.3]):
             docs = ["valid doc", "", "another doc", None, "   "]
             results = mock_reranker.rerank("query", docs)
-            
+
             # Should only have valid docs
             texts = [r[0] for r in results]
             assert "" not in texts
@@ -73,7 +75,7 @@ class TestCrossEncoderReranker:
         """Test rerank raises ValueError for invalid query."""
         with pytest.raises(ValueError, match="non-empty string"):
             mock_reranker.rerank("", ["doc1", "doc2"])
-        
+
         with pytest.raises(ValueError, match="non-empty string"):
             mock_reranker.rerank("   ", ["doc1", "doc2"])
 
@@ -90,16 +92,15 @@ class TestCrossEncoderReranker:
     def test_rerank_scores_are_python_floats(self, mock_reranker, sample_chunks):
         """Test scores are converted to Python floats (not numpy)."""
         import numpy as np
-        
+
         # Mock returns numpy floats
         with mock.patch.object(
-            mock_reranker.model, "predict", 
-            return_value=np.array([0.9, 0.3, 0.1, 0.7])
+            mock_reranker.model, "predict", return_value=np.array([0.9, 0.3, 0.1, 0.7])
         ):
             results = mock_reranker.rerank("query", sample_chunks)
-            
+
             for _, score in results:
-                assert type(score) == float  # Must be Python float, not np.float
+                assert isinstance(score, float)  # Must be Python float, not np.float
 
 
 class TestCrossEncoderRerankerInit:
@@ -108,25 +109,25 @@ class TestCrossEncoderRerankerInit:
     def test_init_with_default_model(self):
         """Test initialization uses default model from config."""
         mock_cross_encoder.reset_mock()
-        from reranker import CrossEncoderReranker
         from config import RERANKER_MODEL
-        
+        from reranker import CrossEncoderReranker
+
         # Force reimport by clearing from sys.modules
         if "reranker" in sys.modules:
             del sys.modules["reranker"]
-        
-        from reranker import CrossEncoderReranker
+
         CrossEncoderReranker()
         mock_cross_encoder.assert_called_with(RERANKER_MODEL)
 
     def test_init_with_custom_model(self):
         """Test initialization with custom model name."""
         mock_cross_encoder.reset_mock()
-        
+
         if "reranker" in sys.modules:
             del sys.modules["reranker"]
-            
+
         from reranker import CrossEncoderReranker
+
         CrossEncoderReranker(model_name="custom/model")
         mock_cross_encoder.assert_called_with("custom/model")
 
@@ -134,14 +135,14 @@ class TestCrossEncoderRerankerInit:
         """Test initialization failure raises RuntimeError."""
         mock_cross_encoder.reset_mock()
         mock_cross_encoder.side_effect = Exception("Load failed")
-        
+
         if "reranker" in sys.modules:
             del sys.modules["reranker"]
-            
+
         from reranker import CrossEncoderReranker
-        
+
         with pytest.raises(RuntimeError, match="Failed to load reranker"):
             CrossEncoderReranker()
-        
+
         # Reset side_effect for other tests
         mock_cross_encoder.side_effect = None

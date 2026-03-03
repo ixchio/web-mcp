@@ -4,8 +4,10 @@ Example Python client for Web MCP Server.
 
 Demonstrates how to use the API programmatically.
 """
-import httpx
+
 import json
+
+import httpx
 
 # Configuration
 BASE_URL = "http://localhost:7860"
@@ -23,12 +25,12 @@ def get_headers():
 def search(query: str, search_type: str = "search", num_results: int = 5):
     """
     Search the web using Serper API.
-    
+
     Args:
         query: Search query string
         search_type: "search" for web, "news" for news
         num_results: Number of results (1-20)
-    
+
     Returns:
         Search results with metadata
     """
@@ -48,11 +50,11 @@ def search(query: str, search_type: str = "search", num_results: int = 5):
 def fetch(url: str, timeout: int = 20):
     """
     Fetch and extract content from a URL.
-    
+
     Args:
         url: URL to fetch
         timeout: Request timeout in seconds
-    
+
     Returns:
         Extracted content with metadata
     """
@@ -83,7 +85,7 @@ def main():
     print("=" * 60)
     print("Web MCP Server - Python Client Example")
     print("=" * 60)
-    
+
     # Health check
     print("\n📋 Health Check:")
     try:
@@ -93,19 +95,19 @@ def main():
         print(f"❌ Health check failed: {e}")
         print("Make sure the server is running at", BASE_URL)
         return
-    
+
     # Search example
     print("\n🔍 Search Example:")
     results = search("Python async programming", num_results=3)
     print(json.dumps(results, indent=2))
-    
+
     # Fetch example
     print("\n📥 Fetch Example:")
     content = fetch("https://httpbin.org/html")
     print(f"Title: {content.get('title', 'N/A')}")
     print(f"Word count: {content.get('word_count', 0)}")
     print(f"Content preview: {content.get('content', '')[:200]}...")
-    
+
     print("\n✅ All examples completed!")
 
 

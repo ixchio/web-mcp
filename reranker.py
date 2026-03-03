@@ -4,8 +4,9 @@ Cross-encoder reranker module.
 Provides a CrossEncoderReranker class that reranks document candidates
 using a cross-encoder model for improved relevance scoring.
 """
+
 import logging
-from typing import List, Optional, Tuple
+from typing import Optional
 
 from sentence_transformers import CrossEncoder
 
@@ -39,9 +40,9 @@ class CrossEncoderReranker:
     def rerank(
         self,
         query: str,
-        documents: List[str],
+        documents: list[str],
         top_k: Optional[int] = None,
-    ) -> List[Tuple[str, float]]:
+    ) -> list[tuple[str, float]]:
         """Rerank a list of documents against a query.
 
         Args:
@@ -70,7 +71,7 @@ class CrossEncoderReranker:
         scores = self.model.predict(pairs)
 
         # Convert numpy types to Python floats for JSON serialization
-        scored_docs: List[Tuple[str, float]] = [
+        scored_docs: list[tuple[str, float]] = [
             (doc, float(score)) for doc, score in zip(valid_docs, scores)
         ]
         scored_docs.sort(key=lambda x: x[1], reverse=True)

@@ -20,6 +20,7 @@ Environment Variables:
     FAISS_CACHE_TTL  - Seconds to cache FAISS index (default: 300)
     API_AUTH_TOKEN   - Bearer token for API auth (disabled if not set)
 """
+
 import os
 from typing import Optional
 

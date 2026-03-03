@@ -40,7 +40,7 @@ Works with **Claude Desktop**, **Cursor**, and any MCP-compatible client.
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Option 1: Docker (Recommended)
 

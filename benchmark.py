@@ -8,9 +8,12 @@ Metrics:
 
 Requires: pip install datasets scikit-learn
 """
+
 import time
+
 import numpy as np
 from sklearn.metrics import ndcg_score
+
 from rag import RAGPipeline
 from reranker import CrossEncoderReranker
 
@@ -21,7 +24,8 @@ def _load_msmarco_slice(n_queries: int = 20):
 
     print(f"Downloading MS MARCO dev-small slice ({n_queries} queries)...")
     ds = load_dataset(
-        "microsoft/ms_marco", "v1.1",
+        "microsoft/ms_marco",
+        "v1.1",
         split=f"validation[:{n_queries}]",
         trust_remote_code=True,
     )
@@ -43,12 +47,30 @@ def run_benchmarks():
     # ── Retrieval latency on synthetic corpus ────────────────────────────────
     print("[2/4] Retrieval latency & throughput (synthetic corpus)")
     corpus = [
-        {"url": "doc1", "content": "The Eiffel Tower is a wrought-iron lattice tower on the Champ de Mars in Paris, France."},
-        {"url": "doc2", "content": "The Statue of Liberty is a colossal neoclassical sculpture on Liberty Island in New York Harbor."},
-        {"url": "doc3", "content": "Mount Everest is Earth's highest mountain above sea level, located in the Himalayas."},
-        {"url": "doc4", "content": "The Great Wall of China is a series of fortifications built across the historical northern borders of ancient Chinese states."},
-        {"url": "doc5", "content": "Paris is the capital and most populous city of France. The city is a major transport hub."},
-        {"url": "doc6", "content": "The speed of light in vacuum is exactly 299,792,458 metres per second."},
+        {
+            "url": "doc1",
+            "content": "The Eiffel Tower is a wrought-iron lattice tower on the Champ de Mars in Paris, France.",
+        },
+        {
+            "url": "doc2",
+            "content": "The Statue of Liberty is a colossal neoclassical sculpture on Liberty Island in New York Harbor.",
+        },
+        {
+            "url": "doc3",
+            "content": "Mount Everest is Earth's highest mountain above sea level, located in the Himalayas.",
+        },
+        {
+            "url": "doc4",
+            "content": "The Great Wall of China is a series of fortifications built across the historical northern borders of ancient Chinese states.",
+        },
+        {
+            "url": "doc5",
+            "content": "Paris is the capital and most populous city of France. The city is a major transport hub.",
+        },
+        {
+            "url": "doc6",
+            "content": "The speed of light in vacuum is exactly 299,792,458 metres per second.",
+        },
     ]
     rag.build_index(corpus)
 
@@ -104,7 +126,7 @@ def run_benchmarks():
                         bi_scores[i] = max(bi_scores[i], r["score"])
                         break
 
-            true_labels = [float(l) for l in labels]
+            true_labels = [float(label) for label in labels]
 
             if sum(true_labels) == 0:
                 continue
@@ -145,7 +167,7 @@ def run_benchmarks():
         retrieved = rag.retrieve(q, top_k=2)
         reranked = reranker.rerank(q, [r["text"] for r in retrieved])
         context = "\n".join([r[0] for r in reranked[:2]])
-        answer = rag.generate_answer(q, context)
+        rag.generate_answer(q, context)
         e2e_times.append(time.time() - t0)
 
     print(f"      Avg E2E latency: {np.mean(e2e_times):.2f}s")
