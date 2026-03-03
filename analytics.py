@@ -1,10 +1,21 @@
-# ─── analytics.py ──────────────────────────────────────────────────────────────
-import os
-import json
+"""
+Analytics module for tracking request counts.
+
+Provides async-safe request counting with file-based persistence
+and support for HuggingFace Spaces persistent storage.
+"""
 import asyncio
+import json
+import logging
+import os
 from datetime import datetime, timedelta, timezone
-from filelock import FileLock  # pip install filelock
-import pandas as pd  # already available in HF images
+
+import pandas as pd
+from filelock import FileLock
+
+__all__ = ["record_request", "last_n_days_count_df"]
+
+logger = logging.getLogger(__name__)
 
 # Determine data directory based on environment
 # 1. Check for environment variable override
@@ -14,10 +25,10 @@ DATA_DIR = os.getenv("ANALYTICS_DATA_DIR")
 if not DATA_DIR:
     if os.path.exists("/data") and os.access("/data", os.W_OK):
         DATA_DIR = "/data"
-        print("[Analytics] Using persistent storage at /data")
+        logger.info("Using persistent storage at /data")
     else:
         DATA_DIR = "./data"
-        print("[Analytics] Using local storage at ./data")
+        logger.info("Using local storage at ./data")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 

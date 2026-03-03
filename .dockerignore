@@ -1,0 +1,56 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.eggs
+*.egg-info
+.pytest_cache
+.coverage
+htmlcov
+.tox
+.nox
+
+# Virtual environments
+venv
+.venv
+env
+ENV
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Testing
+tests/
+pytest.ini
+.coverage
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# CI/CD
+.github
+
+# Local data
+data/
+*.json
+*.log
+
+# Models (downloaded at runtime)
+*.bin
+*.pt
+*.onnx
+
+# Misc
+.DS_Store
+Thumbs.db
